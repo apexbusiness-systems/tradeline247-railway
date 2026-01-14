@@ -5,10 +5,10 @@ builder = "NIXPACKS"
 paths = ["tradeline-voice-server/**"]
 
 [deploy]
-startCommand = "cd tradeline-voice-server && node server.js"
+startCommand = "node tradeline-voice-server/server.js"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
-healthcheckPath = "/healthz"
+healthcheckPath = "/health"
 healthcheckTimeout = 30
 
 [env]
