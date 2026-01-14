@@ -1,0 +1,15 @@
+[build]
+builder = "NIXPACKS"
+
+[build.watchPatterns]
+paths = ["tradeline-voice-server/**"]
+
+[deploy]
+startCommand = "cd tradeline-voice-server && node server.js"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+healthcheckPath = "/healthz"
+healthcheckTimeout = 30
+
+[env]
+NODE_ENV = "production"
