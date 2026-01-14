@@ -1,0 +1,11 @@
+[phases.setup]
+nixPkgs = ["nodejs-20_x"]
+
+[phases.install]
+cmds = [
+  "cd tradeline-voice-server",
+  "npm ci"
+]
+
+[start]
+cmd = "cd tradeline-voice-server && node server.js"
