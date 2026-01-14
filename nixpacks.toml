@@ -2,10 +2,11 @@
 nixPkgs = ["nodejs-20_x"]
 
 [phases.install]
-cmds = [
-  "cd tradeline-voice-server",
-  "npm ci"
-]
+dependsOn = ["setup"]
+cmds = ["npm ci --prefix tradeline-voice-server"]
+
+[phases.build]
+dependsOn = ["install"]
 
 [start]
-cmd = "cd tradeline-voice-server && node server.js"
+cmd = "npm start --prefix tradeline-voice-server"
