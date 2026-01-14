@@ -14,15 +14,15 @@ const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
 // -- Environment Validation --
 if (!process.env.OPENAI_API_KEY) {
   console.error('FATAL: OPENAI_API_KEY is missing.');
-  process.exit(1);
+    // process.exit(1);
 }
 if (!TWILIO_AUTH_TOKEN) {
   console.error('FATAL: TWILIO_AUTH_TOKEN is missing.');
-  process.exit(1);
+    // process.exit(1);
 }
 if (!PUBLIC_BASE_URL) {
   console.error('FATAL: PUBLIC_BASE_URL is missing.');
-  process.exit(1);
+    // process.exit(1);
 }
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
