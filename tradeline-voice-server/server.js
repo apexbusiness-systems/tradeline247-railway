@@ -1,252 +1,150 @@
-require('dotenv').config();
-const express = require('express');
-const { createServer } = require('http');
-const { WebSocketServer } = require('ws');
-const OpenAI = require('openai');
-const helmet = require('helmet');
-const twilio = require('twilio');
+ROLE: You are a senior frontend engineer and build sheriff. You will complete a one‑pass implementation that produces a pixel‑accurate landing page, restores missing content, corrects broken functionality, and passes every configured CI gate (ruff/E501, npm lint, typecheck, build, smoke, SonarQube Grade A). No clarifications or follow‑ups—everything you need is provided below.
 
-// -- Configuration --
-const PORT = process.env.PORT || 8080;
-const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL;
-const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
+Project Context
 
-// -- Environment Validation --
-if (!process.env.OPENAI_API_KEY) {
-  console.error('FATAL: OPENAI_API_KEY is missing.');
-    // process.exit(1);
-}
-if (!TWILIO_AUTH_TOKEN) {
-  console.error('FATAL: TWILIO_AUTH_TOKEN is missing.');
-    // process.exit(1);
-}
-if (!PUBLIC_BASE_URL) {
-  console.error('FATAL: PUBLIC_BASE_URL is missing.');
-    // process.exit(1);
-}
+Repo root: C:\Users\sinyo\OMNILINK-APEX HUB\APEX-OmniLink\APEX-OmniHub\APEX-OmniHub.
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const app = express();
+Work only in apps/omnihub-site; do not modify other apps or global tooling except as required by these tasks.
 
-// -- Middleware --
-app.set('trust proxy', true);
-app.use(helmet());
-app.use(express.urlencoded({ extended: true })); // Twilio sends form-urlencoded
-app.use(express.json());
+Local reference images (do not ask for them):
 
-// -- Health Check --
-app.get('/healthz', (req, res) => res.status(200).send('Voice Brain Online 🟢'));
+apps\omnihub-site\light.png
 
-// -- Twilio Webhook (Voice Entry Point) --
-app.post('/voice-answer', (req, res) => {
-  // Signature Validation
-  const signature = req.get('X-Twilio-Signature');
-  const url = `${PUBLIC_BASE_URL}/voice-answer`;
-    console.log('[DEBUG] PUBLIC_BASE_URL:', PUBLIC_BASE_URL);
-  console.log('[DEBUG] Constructed URL:', url);
-  console.log('[DEBUG] Signature:', signature);
-  console.log('[DEBUG] Params:', params);
-  const params = req.body;
-  
-  // Skip validation if SKIP_TWILIO_VALIDATION is set (for debugging)
-  if (process.env.SKIP_TWILIO_VALIDATION === 'true') {
-    console.log('[BYPASS] Skipping Twilio signature validation');
-  } else if (!twilio.validateRequest(TWILIO_AUTH_TOKEN, signature, url, params)) {
+apps\omnihub-site\night.png
 
-  }
+apps\omnihub-site\hero-image.png
 
-  const relayUrl = `${PUBLIC_BASE_URL.replace('https', 'wss')}/relay`;
-  console.log(`[Call Incoming] Validated. Handoff to: ${relayUrl}`);
+Header wordmark is already correct; do not edit or replace it. Use the existing SVG/PNG from apps/omnihub-site/public/assets/.
 
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
-    <Response>
-      <Connect>
-        <ConversationRelay 
-          url="${relayUrl}" 
-          welcomeGreeting="Thank you for calling Trade Line 24 7. How can I help?"
-          transcriptionProvider="Deepgram"
-          transcriptionLanguage="multi"
-          speechModel="nova-3-general"
-          ttsProvider="ElevenLabs"
-          ttsLanguage="multi"
-          interruptible="speech"
-          preemptible="true" 
-        />
-      </Connect>
-    </Response>`;
+Phase 1 – Prepare Assets & Overlay Mode
 
-  res.type('text/xml').send(twiml);
-});
+Create public/reference and public/assets within apps/omnihub-site if they don’t exist.
 
-// -- WebSocket Server (The Brain) --
-const server = createServer(app);
-const wss = new WebSocketServer({ noServer: true });
+Copy the local PNGs into these standardized paths:
 
-// Custom Upgrade Handling for Signature Validation
-server.on('upgrade', (request, socket, head) => {
-  const { url: requestUrl } = request;
-  const fullUrl = `${PUBLIC_BASE_URL}${requestUrl}`;
-  const signature = request.headers['x-twilio-signature'];
+apps/omnihub-site/light.png      → apps/omnihub-site/public/reference/home-light.png
+apps/omnihub-site/night.png      → apps/omnihub-site/public/reference/home-night.png
+apps/omnihub-site/hero-image.png → apps/omnihub-site/public/assets/hero-light.png
+apps/omnihub-site/hero-image.png → apps/omnihub-site/public/assets/hero-night.png
 
-  // Parse query params from requestUrl for validation
-  // ConversationRelay sends params in the query string
-  const urlObj = new URL(fullUrl);
-  const params = Object.fromEntries(urlObj.searchParams);
 
-  if (!twilio.validateRequest(TWILIO_AUTH_TOKEN, signature, fullUrl, params)) {
-    console.error('[Security] Invalid Twilio Signature on WebSocket upgrade');
-    socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
-    socket.destroy();
-    return;
-  }
+Implement an overlay mode for pixel alignment:
 
-  wss.handleUpgrade(request, socket, head, (ws) => {
-    wss.emit('connection', ws, request);
-  });
-});
+?ref=light overlays /reference/home-light.png.
 
-wss.on('connection', (ws) => {
-  console.log('[Connection] New Secure Call Connected');
+?ref=night overlays /reference/home-night.png.
 
-  const session = {
-    history: [
-      { role: 'system', content: 'You are the TradeLine 24/7 AI receptionist. Be professional, concise (max 2 sentences), and helpful. Do not use markdown. Speak in the same language as the user.' },
-    ],
-    lang: 'en', // default
-    abortController: null,
-    heartbeat: null,
-  };
+Use fixed positioning, 100 % width/height, pointer-events: none, opacity default 0.35.
 
-  // Heartbeat
-  session.heartbeat = setInterval(() => {
-    if (ws.readyState === ws.OPEN) {
-      ws.ping();
-    } else {
-      clearInterval(session.heartbeat);
-    }
-  }, 20000);
+Provide a small dev‑only UI or hotkey to toggle overlay and adjust opacity.
 
-  ws.on('pong', () => {
-    // Connection alive
-  });
+Phase 2 – Header & Navigation Fixes
 
-  ws.on('message', async (data) => {
-    try {
-      const msg = JSON.parse(data);
+Remove the existing desktop link row. Add a burger menu that opens a drawer with working links:
 
-      if (msg.type === 'setup') {
-        console.log(`[Setup] SID: ${msg.callSid}`);
-      }
+Links must scroll to #features, #tri-force, #integrations, #cta, or navigate to /demo and /tech-specs.
 
-      if (msg.type === 'prompt') {
-        const userText = msg.voicePrompt;
-        const userLang = msg.lang || 'en';
-        session.lang = userLang;
+Delete the redundant “Get Started” button in the header.
 
-        if (!userText) return;
+Add one auth button in that spot:
 
-        console.log(`[User (${userLang})]: ${userText}`);
-        session.history.push({ role: 'user', content: userText });
+Unauthenticated: label it Log in and link to existing sign‑in or request‑access route.
 
-        // Cap history
-        if (session.history.length > 20) {
-          session.history = [session.history[0], ...session.history.slice(-19)];
-        }
+Authenticated: label it Log out and ensure it clears session and redirects to home.
 
-        // Abort previous in-flight
-        if (session.abortController) {
-          session.abortController.abort();
-        }
-        session.abortController = new AbortController();
+Leave the theme toggle pills (“WHITE FORTRESS” / “NIGHT WATCH”) unchanged.
 
-        // 1.2s Dead Air Timer
-        let fillerSent = false;
-        const fillerTimer = setTimeout(() => {
-          if (ws.readyState === ws.OPEN && !session.abortController.signal.aborted) {
-            fillerSent = true;
-            // Provide localized fillers if possible, for now simple english fallback or multi-lang aware
-            const filler = userLang.startsWith('es') ? 'Un momento...' : 'One moment...';
-            console.log(`[Filler]: ${filler}`);
-            ws.send(JSON.stringify({
-              type: 'text',
-              token: filler,
-              last: true,
-              lang: userLang,
-              interruptible: true,
-              preemptible: true,
-            }));
-          }
-        }, 1200);
+Phase 3 – Hero Section Overhaul
 
-        try {
-          const start = Date.now();
-          const completion = await openai.chat.completions.create({
-            model: 'gpt-4o-mini',
-            messages: session.history,
-            max_tokens: 150,
-            temperature: 0.6,
-          }, { signal: session.abortController.signal });
+Scale and position the hero illustration so it dominates the right half of the hero, matching the reference composition. Use hero-light.png and hero-night.png for light/dark themes and add a subtle glow behind it.
 
-          clearTimeout(fillerTimer);
-          const latency = Date.now() - start;
-          const aiText = completion.choices[0].message.content;
+Replace the rigid grid background:
 
-          if (session.abortController.signal.aborted) return;
+Night: deep navy gradient, radial glow, starfield, sweeping arcs. No harsh vertical seam.
 
-          console.log(`[AI]: ${aiText} (${latency}ms)`);
-          session.history.push({ role: 'assistant', content: aiText });
+Light: airy white/pale blue gradient, faint arcs. If any grid remains, keep it ≤ 8 % opacity.
 
-          if (ws.readyState === ws.OPEN) {
-            // Note: If filler was sent, this is a new "last=true" message which effectively
-            // sequences after the filler in Twilio's TTS queue.
-            ws.send(JSON.stringify({
-              type: 'text',
-              token: aiText,
-              last: true,
-              lang: userLang,
-              interruptible: true,
-              preemptible: true,
-            }));
-          }
-        } catch (openaiErr) {
-          clearTimeout(fillerTimer);
-          if (openaiErr.name === 'AbortError') {
-            console.log('[Flow] OpenAI Request Aborted');
-          } else {
-            console.error('[Error] OpenAI:', openaiErr);
-            // Fail safe
-            const errorMsg = userLang.startsWith('es') ? 'Lo siento, no pude escuchar. ¿Puede repetir?' : 'I am sorry, I did not catch that. Could you please repeat?';
-            if (ws.readyState === ws.OPEN) {
-              ws.send(JSON.stringify({
-                type: 'text',
-                token: errorMsg,
-                last: true,
-                lang: userLang,
-              }));
-            }
-          }
-        }
-      }
+Restore hero copy exactly:
 
-      if (msg.type === 'interrupt') {
-        console.log('[Flow] Interrupted');
-        if (session.abortController) {
-          session.abortController.abort();
-        }
-      }
+Eyebrow: “APEX OMNIHUB”.
 
-    } catch (err) {
-      console.error('[Error] Msg Processing:', err);
-    }
-  });
+Headline: “Intelligence, Designed.” (or the existing variant in the repo).
 
-  ws.on('close', () => {
-    console.log('[Connection] Call Ended');
-    clearInterval(session.heartbeat);
-    if (session.abortController) {
-      session.abortController.abort();
-    }
-  });
-});
+Accent: “IT SEES YOU.”
 
-server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+Proof microline: “DIRECTABLE • ACCOUNTABLE • DEPENDABLE.”
+
+Supporting copy: include “Understand Everything. Communicate Anything, to Every Platform.” plus the longer paragraph about OmniHub as a universal translator and orchestrator.
+
+Correct typography sizing and spacing to match the reference. Remove the orange accent in Night; use a cyan/blue highlight on “IT SEES YOU.”
+
+Phase 4 – Restore Missing Pillars & Improve Content
+
+Tri‑Force Protocol: Add a dedicated section with three cards (Connect, Translate, Execute) and a short description. Anchor it with #tri-force.
+
+Orchestrator: Add a section describing OmniHub’s orchestration role; link anchor #orchestrator.
+
+Fortress Protocol / Zero‑Trust Fortress: Ensure there’s a section on security posture and least‑privilege; anchor #fortress.
+
+MAN Mode: Create a section explaining Manual Authorization Needed; anchor #man-mode.
+
+Showcase cards: Replace the low‑creativity dashboards with four original capability cards (Tri‑Force, Orchestrator, Fortress, MAN Mode). Use abstract icons or CSS‑built mini‑illustrations. Each card must link to the corresponding section (no 404s).
+
+Phase 5 – Fix Broken Routes & Remove Dead Sections
+
+Remove the “How It Works” cards from the hero area and repurpose the content into Tri‑Force or a tech/spec readme page. Don’t leave empty space.
+
+Ensure /privacy and /terms pages exist with real content; update footer links accordingly.
+
+Make sure all showcase cards scroll to anchors or navigate to valid pages (such as /tech-specs or /readme). No dead links.
+
+Phase 6 – Typography & Style Unification
+
+Keep the header wordmark untouched.
+
+Use the existing fonts but apply a single, consistent font stack across headings, nav labels, and body text to harmonize with the wordmark.
+
+Phase 7 – Fix Tailwind Warning
+
+The build complains that Tailwind’s content is missing. Create or update tailwind.config.cjs so that:
+
+content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"]
+
+
+This must eliminate the Tailwind warning in the build output.
+
+Phase 8 – Verification & CI Gates
+
+From apps/omnihub-site, run:
+
+npm ci
+npm run lint
+npm run typecheck
+npm run build
+npm run smoke
+
+
+Fix any errors before proceeding.
+
+From the repo root, run:
+
+ruff check .          # enforce E501 and other Python rules
+npm run lint
+npm run typecheck
+npm run build
+npm run smoke
+
+
+Execute the configured SonarQube/SonarCloud scan. You must achieve a Quality Gate Pass with Grade A; fix code smells, duplication, and complexity without disabling rules.
+
+Deliverables
+
+A pixel‑perfect landing page that visually matches light.png and night.png when overlayed via ?ref=light and ?ref=night.
+
+All annotated issues resolved: nav links replaced by burger menu, header button simplified, hero scaled and styled, capability cards refreshed, Privacy/Terms pages created, copy restored, Tri‑Force/Orchestrator/Fortress/MAN Mode sections visible, taglines reinstated.
+
+Zero broken links or 404s.
+
+All CI gates (ruff/E501, lint, typecheck, build, smoke) and Sonar Grade A pass.
+
+Provide a concise summary listing the changed files, commands you ran, and confirm that all checks passed successfully.
