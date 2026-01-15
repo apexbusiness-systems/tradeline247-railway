@@ -42,6 +42,10 @@ app.post('/voice-answer', (req, res) => {
   // Signature Validation
   const signature = req.get('X-Twilio-Signature');
   const url = `${PUBLIC_BASE_URL}/voice-answer`;
+    console.log('[DEBUG] PUBLIC_BASE_URL:', PUBLIC_BASE_URL);
+  console.log('[DEBUG] Constructed URL:', url);
+  console.log('[DEBUG] Signature:', signature);
+  console.log('[DEBUG] Params:', params);
   const params = req.body;
 
   if (!twilio.validateRequest(TWILIO_AUTH_TOKEN, signature, url, params)) {
