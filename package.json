@@ -1,0 +1,10 @@
+{
+  "name": "tradeline247-railway",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "cd tradeline-voice-server && node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
