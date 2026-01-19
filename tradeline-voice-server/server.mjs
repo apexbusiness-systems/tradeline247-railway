@@ -98,6 +98,25 @@ app.get('/', async (req, reply) => {
     return { status: 'online', service: 'TradeLine 24/7 Voice Orchestrator' };
 });
 
+// Twilio Voice Incoming Call Handler
+app.post('/', async (request, reply) => {
+      const domain = request.hostname || 'localhost:8080';
+      const wsUrl = `wss://${domain}/media-stream`;
+
+      const twiml = `
+          <Response>
+                <Connect>
+                        <Stream url="${wsUrl}" />
+                              </Connect>
+                                  </Response>
+                                    `.trim();
+
+      reply
+        .code(200)
+        .header('Content-Type', 'text/xml')
+        .send(twiml);
+    });
+
 // WebSocket Route (The Core Loop)
 app.register(async (fastify) => {
     fastify.get('/media-stream', { websocket: true }, (connection, req) => {
