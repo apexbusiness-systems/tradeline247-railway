@@ -16,7 +16,8 @@ const {
     EMAIL_TO,
     EMAIL_USER,
     EMAIL_PASS,
-    EMAIL_SERVICE
+    EMAIL_SERVICE,
+    PUBLIC_BASE_URL
 } = process.env;
 
 // Validate critical env vars
@@ -29,7 +30,7 @@ if (!OPENAI_API_KEY) {
 const sessionStore = new Map(); // CallSid -> { transcript: [], startTime: Date }
 
 // -- Clients --
-const app = Fastify();
+const app = Fastify({ logger: true, trustProxy: true });
 const twilioClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
 const mailTransport = nodemailer.createTransport({
     service: EMAIL_SERVICE || 'gmail', // Default to gmail if not specified, or use generic SMTP via env
@@ -99,23 +100,24 @@ app.get('/', async (req, reply) => {
 });
 
 // Twilio Voice Incoming Call Handler
-app.post('/', async (request, reply) => {
-      const domain = request.hostname || 'localhost:8080';
-      const wsUrl = `wss://${domain}/media-stream`;
+app.post('/voice', async (request, reply) => {
+    const base = PUBLIC_BASE_URL;
+    if (!base) {
+        request.log.error("PUBLIC_BASE_URL missing");
+        return reply.code(500).send("Missing PUBLIC_BASE_URL");
+    }
 
-      const twiml = `
-          <Response>
-                <Connect>
-                        <Stream url="${wsUrl}" />
-                              </Connect>
-                                  </Response>
-                                    `.trim();
+    const wsUrl = base.replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://') + '/media-stream';
 
-      reply
-        .code(200)
-        .header('Content-Type', 'text/xml')
-        .send(twiml);
-    });
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <Stream url="${wsUrl}" />
+  </Connect>
+</Response>`;
+
+    reply.code(200).header('Content-Type', 'text/xml').send(twiml);
+});
 
 // WebSocket Route (The Core Loop)
 app.register(async (fastify) => {
