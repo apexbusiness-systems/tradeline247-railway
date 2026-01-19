@@ -16,7 +16,8 @@ const {
     EMAIL_TO,
     EMAIL_USER,
     EMAIL_PASS,
-    EMAIL_SERVICE
+    EMAIL_SERVICE,
+    PUBLIC_BASE_URL
 } = process.env;
 
 // Validate critical env vars
