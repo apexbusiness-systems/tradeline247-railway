@@ -2,26 +2,30 @@
   "name": "tradeline-voice-server",
   "version": "1.0.0",
   "description": "Twilio ConversationRelay Orchestrator",
-  "main": "server.js",
+  "main": "server.mjs",
   "scripts": {
-    "start": "node server.js",
-    "dev": "nodemon server.js",
+    "start": "node server.mjs",
+    "dev": "nodemon server.mjs",
     "lint": "eslint ."
   },
   "dependencies": {
+    "@fastify/formbody": "^8.0.2",
+    "@fastify/websocket": "^11.2.0",
     "dotenv": "16.4.5",
     "express": "4.19.2",
-    "ws": "8.16.0",
-    "openai": "4.29.0",
+    "fastify": "^5.7.1",
     "helmet": "7.1.0",
-    "xss-clean": "0.1.4",
-    "twilio": "5.0.0"
+    "nodemailer": "^7.0.12",
+    "openai": "4.29.0",
+    "twilio": "5.0.0",
+    "ws": "8.16.0",
+    "xss-clean": "0.1.4"
   },
   "devDependencies": {
-    "nodemon": "3.1.0",
     "eslint": "8.57.0",
     "eslint-config-airbnb-base": "15.0.0",
-    "eslint-plugin-import": "2.29.1"
+    "eslint-plugin-import": "2.29.1",
+    "nodemon": "3.1.0"
   },
   "engines": {
     "node": ">=18.0.0"

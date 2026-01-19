@@ -2,8 +2,7 @@
   "name": "tradeline247-railway",
   "version": "1.0.0",
   "scripts": {
-    "start": "cd tradeline-voice-server && node server.js"
-  },
+    "start": "cd tradeline-voice-server && node server.mjs",  },
   "engines": {
     "node": ">=18.0.0"
   }
