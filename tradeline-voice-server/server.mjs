@@ -26,11 +26,63 @@ if (!OPENAI_API_KEY) {
     process.exit(1);
 }
 
+// Validate and normalize PUBLIC_BASE_URL
+let PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL;
+if (!PUBLIC_BASE_URL) {
+    console.error('CRITICAL: PUBLIC_BASE_URL is missing');
+    process.exit(1);
+}
+PUBLIC_BASE_URL = PUBLIC_BASE_URL.trim().replace(/\/$/, ''); // trim and remove trailing slash
+if (!PUBLIC_BASE_URL.startsWith('http://') && !PUBLIC_BASE_URL.startsWith('https://')) {
+    console.error('CRITICAL: PUBLIC_BASE_URL must start with http:// or https://');
+    process.exit(1);
+}
+console.log(`[Config] PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}`);
+
+if (!TWILIO_AUTH_TOKEN) {
+    console.warn('WARNING: TWILIO_AUTH_TOKEN is missing - signature validation will fail in production');
+}
+
 // -- Global State --
 const sessionStore = new Map(); // CallSid -> { transcript: [], startTime: Date }
+const callTokens = new Map(); // callSid -> token (short-lived, 5min expiry)
+
+// -- Security Helpers --
+import crypto from 'crypto';
+
+function generateCallToken(callSid) {
+    const token = crypto.randomBytes(16).toString('hex');
+    callTokens.set(callSid, token);
+    setTimeout(() => callTokens.delete(callSid), 300000); // 5min expiry
+    return token;
+}
+
+function validateCallToken(callSid, token) {
+    return callTokens.get(callSid) === token;
+}
+
+function validateTwilioSignature(url, params, signature) {
+    if (process.env.SKIP_TWILIO_VALIDATION === 'true') {
+        console.log('[Security] Twilio validation bypassed via env flag');
+        return true;
+    }
+    if (!TWILIO_AUTH_TOKEN || !signature) {
+        console.error('[Security] Missing TWILIO_AUTH_TOKEN or signature');
+        return false;
+    }
+    try {
+        return twilio.validateRequest(TWILIO_AUTH_TOKEN, signature, url, params);
+    } catch (err) {
+        console.error('[Security] Signature validation error:', err);
+        return false;
+    }
+}
 
 // -- Clients --
-const app = Fastify({ logger: true, trustProxy: true });
+const app = Fastify({
+    logger: true,
+    trustProxy: true  // Critical for Railway proxy headers
+});
 const twilioClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
 const mailTransport = nodemailer.createTransport({
     service: EMAIL_SERVICE || 'gmail', // Default to gmail if not specified, or use generic SMTP via env
@@ -99,33 +151,66 @@ app.get('/', async (req, reply) => {
     return { status: 'online', service: 'TradeLine 24/7 Voice Orchestrator' };
 });
 
-// Twilio Voice Incoming Call Handler
-app.post('/voice', async (request, reply) => {
-    const base = PUBLIC_BASE_URL;
-    if (!base) {
-        request.log.error("PUBLIC_BASE_URL missing");
-        return reply.code(500).send("Missing PUBLIC_BASE_URL");
+// Canonical voice webhook handler (with security + proper URL construction)
+async function handleVoiceWebhook(request, reply) {
+    // Twilio signature validation
+    const signature = request.headers['x-twilio-signature'];
+    const url = `${PUBLIC_BASE_URL}${request.url}`;
+    const params = request.body || {};
+
+    if (!validateTwilioSignature(url, params, signature)) {
+        console.error('[Security] Invalid Twilio signature');
+        return reply.code(403).send('Forbidden');
     }
 
-    const wsUrl = base.replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://') + '/media-stream';
+    // Extract CallSid from Twilio payload
+    const callSid = params.CallSid || 'UNKNOWN';
+    console.log(`[Webhook] Incoming call: ${callSid}`);
+
+    // Generate secure token for this call
+    const token = generateCallToken(callSid);
+
+    // Build secure WebSocket URL with token (use PUBLIC_BASE_URL as source of truth)
+    const wssBase = PUBLIC_BASE_URL.replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://');
+    const wsUrl = `${wssBase}/media-stream?token=${token}&callSid=${callSid}`;
 
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
+  <Say voice="Polly.Joanna-Neural">Hello, thank you for calling Trade Line 24 7. Connecting you now.</Say>
   <Connect>
-    <Stream url="${wsUrl}" />
+    <Stream url="${wsUrl}" statusCallback="${PUBLIC_BASE_URL}/voice-status" statusCallbackMethod="POST" />
   </Connect>
 </Response>`;
 
-    reply.code(200).header('Content-Type', 'text/xml').send(twiml);
-});
+    reply
+        .code(200)
+        .header('Content-Type', 'text/xml')
+        .send(twiml);
+}
+
+// Webhook routes (canonical + aliases for resilience)
+app.post('/voice', handleVoiceWebhook);
+app.post('/voice-answer', handleVoiceWebhook);
+app.post('/', handleVoiceWebhook); // Fallback if Twilio points to root
 
 // WebSocket Route (The Core Loop)
 app.register(async (fastify) => {
     fastify.get('/media-stream', { websocket: true }, (connection, req) => {
-        console.log('[Connection] Client connected to /media-stream');
+        // Extract and validate query params (token security)
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const token = url.searchParams.get('token');
+        const callSid = url.searchParams.get('callSid');
+
+        // Validate token
+        if (!callSid || !token || !validateCallToken(callSid, token)) {
+            console.error('[Security] Invalid or missing WebSocket token');
+            connection.socket.close(1008, 'Unauthorized');
+            return;
+        }
+
+        console.log(`[Connection] Client connected to /media-stream (CallSid: ${callSid})`);
 
         let streamSid = null;
-        let callSid = null;
         let openAiWs = null;
 
         // Helper to send to OpenAI if open
@@ -297,8 +382,18 @@ app.register(async (fastify) => {
     });
 });
 
-// Webhook: Post-Call Status
+// Webhook: Post-Call Status (with signature validation)
 app.post('/voice-status', async (req, reply) => {
+    // Validate Twilio signature
+    const signature = req.headers['x-twilio-signature'];
+    const url = `${PUBLIC_BASE_URL}/voice-status`;
+    const params = req.body || {};
+
+    if (!validateTwilioSignature(url, params, signature)) {
+        console.error('[Security] Invalid Twilio signature on status callback');
+        return reply.code(403).send('Forbidden');
+    }
+
     const { CallSid, CallStatus } = req.body;
     console.log(`[Status] ${CallSid} -> ${CallStatus}`);
 

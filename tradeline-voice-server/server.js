@@ -1,3 +1,7 @@
+// DEPRECATED: This file is no longer used in production.
+// The authoritative server is server.mjs (Fastify-based).
+// DO NOT RUN THIS FILE. See server.mjs instead.
+
 require('dotenv').config();
 const express = require('express');
 const { createServer } = require('http');
