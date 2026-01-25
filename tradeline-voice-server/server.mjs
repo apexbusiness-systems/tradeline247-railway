@@ -7,7 +7,7 @@ import twilio from 'twilio';
 import nodemailer from 'nodemailer';
 
 // -- Configuration --
-const {
+let {
     PORT = 8080,
     OPENAI_API_KEY,
     TWILIO_ACCOUNT_SID,
