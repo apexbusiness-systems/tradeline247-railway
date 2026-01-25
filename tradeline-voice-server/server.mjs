@@ -27,7 +27,6 @@ if (!OPENAI_API_KEY) {
 }
 
 // Validate and normalize PUBLIC_BASE_URL
-let PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL;
 if (!PUBLIC_BASE_URL) {
     console.error('CRITICAL: PUBLIC_BASE_URL is missing');
     process.exit(1);
