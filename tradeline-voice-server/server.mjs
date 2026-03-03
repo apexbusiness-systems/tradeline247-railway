@@ -276,6 +276,19 @@ app.register(async (fastify) => {
     });
 });
 
+// Webhook: Incoming Call (Twilio TwiML)
+app.post('/incoming', async (req, reply) => {
+    console.log(`[Webhook] Incoming call received from ${req.body?.From || 'unknown'}`);
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <Stream url="wss://${req.headers.host}/media-stream" />
+  </Connect>
+</Response>`;
+    
+    return reply.type('text/xml').send(twiml);
+});
+
 // Webhook: Post-Call Status
 app.post('/voice-status', async (req, reply) => {
     const { CallSid, CallStatus } = req.body;
