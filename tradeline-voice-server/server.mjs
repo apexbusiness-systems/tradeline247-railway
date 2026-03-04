@@ -190,6 +190,7 @@ async function handleVoiceWebhook(request, reply) {
 // Webhook routes (canonical + aliases for resilience)
 app.post('/voice', handleVoiceWebhook);
 app.post('/voice-answer', handleVoiceWebhook);
+app.post('/incoming', handleVoiceWebhook); // Compatibility alias for Twilio webhook path
 app.post('/', handleVoiceWebhook); // Fallback if Twilio points to root
 
 // WebSocket Route (The Core Loop)
@@ -198,7 +199,7 @@ app.register(async (fastify) => {
         // Extract and validate query params (token security)
         const url = new URL(req.url, `http://${req.headers.host}`);
         const token = url.searchParams.get('token');
-        const callSid = url.searchParams.get('callSid');
+        let callSid = url.searchParams.get('callSid');
 
         // Validate token
         if (!callSid || !token || !validateCallToken(callSid, token)) {
