@@ -44,20 +44,46 @@ if (!TWILIO_AUTH_TOKEN) {
 
 // -- Global State --
 const sessionStore = new Map(); // CallSid -> { transcript: [], startTime: Date }
-const callTokens = new Map(); // callSid -> token (short-lived, 5min expiry)
 
 // -- Security Helpers --
 import crypto from 'crypto';
 
 function generateCallToken(callSid) {
-    const token = crypto.randomBytes(16).toString('hex');
-    callTokens.set(callSid, token);
-    setTimeout(() => callTokens.delete(callSid), 300000); // 5min expiry
-    return token;
+    const expiresAt = Date.now() + 300000; // 5 minutes
+    const payload = `${callSid}.${expiresAt}`;
+    const secret = TWILIO_AUTH_TOKEN || OPENAI_API_KEY;
+    const signature = crypto
+        .createHmac('sha256', secret)
+        .update(payload)
+        .digest('hex');
+
+    return `${payload}.${signature}`;
 }
 
 function validateCallToken(callSid, token) {
-    return callTokens.get(callSid) === token;
+    if (!token) return false;
+
+    const tokenParts = token.split('.');
+    if (tokenParts.length !== 3) return false;
+
+    const [tokenCallSid, expiresAtRaw, providedSignature] = tokenParts;
+    if (tokenCallSid !== callSid) return false;
+
+    const expiresAt = Number(expiresAtRaw);
+    if (!Number.isFinite(expiresAt) || Date.now() > expiresAt) return false;
+
+    const payload = `${tokenCallSid}.${expiresAtRaw}`;
+    const secret = TWILIO_AUTH_TOKEN || OPENAI_API_KEY;
+    const expectedSignature = crypto
+        .createHmac('sha256', secret)
+        .update(payload)
+        .digest('hex');
+
+    const provided = Buffer.from(providedSignature, 'hex');
+    const expected = Buffer.from(expectedSignature, 'hex');
+    if (provided.length !== expected.length) return false;
+
+    return crypto.timingSafeEqual(provided, expected);
 }
 
 function validateTwilioSignature(url, params, signature) {
