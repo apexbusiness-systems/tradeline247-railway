@@ -190,6 +190,7 @@ async function handleVoiceWebhook(request, reply) {
 // Webhook routes (canonical + aliases for resilience)
 app.post('/voice', handleVoiceWebhook);
 app.post('/voice-answer', handleVoiceWebhook);
+app.post('/incoming', handleVoiceWebhook); // Compatibility alias for Twilio webhook path
 app.post('/', handleVoiceWebhook); // Fallback if Twilio points to root
 
 // WebSocket Route (The Core Loop)
