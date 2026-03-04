@@ -95,6 +95,20 @@ function escapeXmlAttribute(value) {
         .replace(/'/g, '&apos;');
 }
 
+function buildStreamTwiml(callSid, preface = 'Connecting you now.') {
+    const token = generateCallToken(callSid);
+    const wssBase = PUBLIC_BASE_URL.replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://');
+    const wsUrl = `${wssBase}/media-stream?token=${encodeURIComponent(token)}&callSid=${encodeURIComponent(callSid)}`;
+
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Joanna-Neural">${preface}</Say>
+  <Connect>
+    <Stream url="${escapeXmlAttribute(wsUrl)}" statusCallback="${escapeXmlAttribute(`${PUBLIC_BASE_URL}/voice-status`)}" statusCallbackMethod="POST" />
+  </Connect>
+</Response>`;
+}
+
 function validateTwilioSignature(url, params, signature) {
     if (process.env.SKIP_TWILIO_VALIDATION === 'true') {
         console.log('[Security] Twilio validation bypassed via env flag');
@@ -204,20 +218,7 @@ async function handleVoiceWebhook(request, reply) {
     const callSid = params.CallSid || 'UNKNOWN';
     console.log(`[Webhook] Incoming call: ${callSid}`);
 
-    // Generate secure token for this call
-    const token = generateCallToken(callSid);
-
-    // Build secure WebSocket URL with token (use PUBLIC_BASE_URL as source of truth)
-    const wssBase = PUBLIC_BASE_URL.replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://');
-    const wsUrl = `${wssBase}/media-stream?token=${encodeURIComponent(token)}&callSid=${encodeURIComponent(callSid)}`;
-
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="Polly.Joanna-Neural">Hello, thank you for calling Trade Line 24 7. Connecting you now.</Say>
-  <Connect>
-    <Stream url="${escapeXmlAttribute(wsUrl)}" statusCallback="${escapeXmlAttribute(`${PUBLIC_BASE_URL}/voice-status`)}" statusCallbackMethod="POST" />
-  </Connect>
-</Response>`;
+    const twiml = buildStreamTwiml(callSid, 'Hello, thank you for calling Trade Line 24 7. Connecting you now.');
 
     reply
         .code(200)
@@ -269,12 +270,16 @@ app.register(async (fastify) => {
             }
             if (name === 'transfer_call') {
                 if (!callSid) return { status: 'error', message: 'No CallSid found' };
+                if (!DISPATCH_PHONE_NUMBER) {
+                    console.error('[Dispatch] Transfer requested but DISPATCH_PHONE_NUMBER is missing');
+                    return { status: 'error', message: 'Transfer line is not configured' };
+                }
                 try {
                     console.log(`[Dispatch] Transferring Call ${callSid} to ${DISPATCH_PHONE_NUMBER}`);
                     await twilioClient.calls(callSid).update({
                         twiml: `<Response>
                       <Say>Please hold while I transfer you to a specialist.</Say>
-                      <Dial>${DISPATCH_PHONE_NUMBER}</Dial>
+                      <Dial action="${PUBLIC_BASE_URL}/transfer-fallback?callSid=${encodeURIComponent(callSid)}" method="POST" timeout="20" answerOnBridge="true">${DISPATCH_PHONE_NUMBER}</Dial>
                     </Response>`
                     });
                     return { status: 'success', message: 'Call transferred' };
@@ -467,6 +472,33 @@ app.post('/voice-status', async (req, reply) => {
     }
 
     return { status: 'ok' };
+});
+
+
+app.post('/transfer-fallback', async (req, reply) => {
+    const signature = req.headers['x-twilio-signature'];
+    const url = `${PUBLIC_BASE_URL}${req.url}`;
+    const params = req.body || {};
+
+    if (!validateTwilioSignature(url, params, signature)) {
+        console.error('[Security] Invalid Twilio signature on transfer fallback');
+        return reply.code(403).send('Forbidden');
+    }
+
+    const callSid = req.query.callSid || req.body.CallSid;
+    const dialStatus = req.body.DialCallStatus || 'unknown';
+    console.log(`[Dispatch] Transfer fallback for ${callSid}: ${dialStatus}`);
+
+    if (dialStatus === 'completed') {
+        return reply.code(200).header('Content-Type', 'text/xml').send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+    }
+
+    const twiml = buildStreamTwiml(
+        callSid,
+        'I could not connect a specialist right now. I am back on the line and can continue helping you.'
+    );
+
+    return reply.code(200).header('Content-Type', 'text/xml').send(twiml);
 });
 
 // -- Start Server --
