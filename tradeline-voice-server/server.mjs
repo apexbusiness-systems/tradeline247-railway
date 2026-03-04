@@ -86,6 +86,15 @@ function validateCallToken(callSid, token) {
     return crypto.timingSafeEqual(provided, expected);
 }
 
+function escapeXmlAttribute(value) {
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/'/g, '&apos;');
+}
+
 function validateTwilioSignature(url, params, signature) {
     if (process.env.SKIP_TWILIO_VALIDATION === 'true') {
         console.log('[Security] Twilio validation bypassed via env flag');
@@ -200,13 +209,13 @@ async function handleVoiceWebhook(request, reply) {
 
     // Build secure WebSocket URL with token (use PUBLIC_BASE_URL as source of truth)
     const wssBase = PUBLIC_BASE_URL.replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://');
-    const wsUrl = `${wssBase}/media-stream?token=${token}&callSid=${callSid}`;
+    const wsUrl = `${wssBase}/media-stream?token=${encodeURIComponent(token)}&callSid=${encodeURIComponent(callSid)}`;
 
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="Polly.Joanna-Neural">Hello, thank you for calling Trade Line 24 7. Connecting you now.</Say>
   <Connect>
-    <Stream url="${wsUrl}" statusCallback="${PUBLIC_BASE_URL}/voice-status" statusCallbackMethod="POST" />
+    <Stream url="${escapeXmlAttribute(wsUrl)}" statusCallback="${escapeXmlAttribute(`${PUBLIC_BASE_URL}/voice-status`)}" statusCallbackMethod="POST" />
   </Connect>
 </Response>`;
 
