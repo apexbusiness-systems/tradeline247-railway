@@ -33,8 +33,8 @@ if (!PUBLIC_BASE_URL) {
 }
 PUBLIC_BASE_URL = PUBLIC_BASE_URL.trim().replace(/\/$/, ''); // trim and remove trailing slash
 if (!PUBLIC_BASE_URL.startsWith('http://') && !PUBLIC_BASE_URL.startsWith('https://')) {
-    console.error('CRITICAL: PUBLIC_BASE_URL must start with http:// or https://');
-    process.exit(1);
+    console.warn('[Config] PUBLIC_BASE_URL missing protocol; defaulting to https://');
+    PUBLIC_BASE_URL = `https://${PUBLIC_BASE_URL}`;
 }
 console.log(`[Config] PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}`);
 
@@ -80,7 +80,10 @@ function validateTwilioSignature(url, params, signature) {
 // -- Clients --
 const app = Fastify({
     logger: true,
-    trustProxy: true  // Critical for Railway proxy headers
+    trustProxy: true,  // Critical for Railway proxy headers
+    routerOptions: {
+        ignoreTrailingSlash: true
+    }
 });
 const twilioClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
 const mailTransport = nodemailer.createTransport({
@@ -188,9 +191,9 @@ async function handleVoiceWebhook(request, reply) {
 }
 
 // Webhook routes (canonical + aliases for resilience)
-app.post('/voice', handleVoiceWebhook);
-app.post('/voice-answer', handleVoiceWebhook);
-app.post('/', handleVoiceWebhook); // Fallback if Twilio points to root
+for (const route of ['/voice', '/voice-answer', '/incoming', '/']) {
+    app.post(route, handleVoiceWebhook);
+}
 
 // WebSocket Route (The Core Loop)
 app.register(async (fastify) => {
@@ -198,7 +201,7 @@ app.register(async (fastify) => {
         // Extract and validate query params (token security)
         const url = new URL(req.url, `http://${req.headers.host}`);
         const token = url.searchParams.get('token');
-        const callSid = url.searchParams.get('callSid');
+        let callSid = url.searchParams.get('callSid');
 
         // Validate token
         if (!callSid || !token || !validateCallToken(callSid, token)) {
