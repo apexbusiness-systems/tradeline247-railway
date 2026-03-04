@@ -33,8 +33,8 @@ if (!PUBLIC_BASE_URL) {
 }
 PUBLIC_BASE_URL = PUBLIC_BASE_URL.trim().replace(/\/$/, ''); // trim and remove trailing slash
 if (!PUBLIC_BASE_URL.startsWith('http://') && !PUBLIC_BASE_URL.startsWith('https://')) {
-    console.error('CRITICAL: PUBLIC_BASE_URL must start with http:// or https://');
-    process.exit(1);
+    console.warn('[Config] PUBLIC_BASE_URL missing protocol; defaulting to https://');
+    PUBLIC_BASE_URL = `https://${PUBLIC_BASE_URL}`;
 }
 console.log(`[Config] PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}`);
 
@@ -44,20 +44,69 @@ if (!TWILIO_AUTH_TOKEN) {
 
 // -- Global State --
 const sessionStore = new Map(); // CallSid -> { transcript: [], startTime: Date }
-const callTokens = new Map(); // callSid -> token (short-lived, 5min expiry)
 
 // -- Security Helpers --
 import crypto from 'crypto';
 
 function generateCallToken(callSid) {
-    const token = crypto.randomBytes(16).toString('hex');
-    callTokens.set(callSid, token);
-    setTimeout(() => callTokens.delete(callSid), 300000); // 5min expiry
-    return token;
+    const expiresAt = Date.now() + 300000; // 5 minutes
+    const payload = `${callSid}.${expiresAt}`;
+    const secret = TWILIO_AUTH_TOKEN || OPENAI_API_KEY;
+    const signature = crypto
+        .createHmac('sha256', secret)
+        .update(payload)
+        .digest('hex');
+
+    return `${payload}.${signature}`;
 }
 
 function validateCallToken(callSid, token) {
-    return callTokens.get(callSid) === token;
+    if (!token) return false;
+
+    const tokenParts = token.split('.');
+    if (tokenParts.length !== 3) return false;
+
+    const [tokenCallSid, expiresAtRaw, providedSignature] = tokenParts;
+    if (tokenCallSid !== callSid) return false;
+
+    const expiresAt = Number(expiresAtRaw);
+    if (!Number.isFinite(expiresAt) || Date.now() > expiresAt) return false;
+
+    const payload = `${tokenCallSid}.${expiresAtRaw}`;
+    const secret = TWILIO_AUTH_TOKEN || OPENAI_API_KEY;
+    const expectedSignature = crypto
+        .createHmac('sha256', secret)
+        .update(payload)
+        .digest('hex');
+
+    const provided = Buffer.from(providedSignature, 'hex');
+    const expected = Buffer.from(expectedSignature, 'hex');
+    if (provided.length !== expected.length) return false;
+
+    return crypto.timingSafeEqual(provided, expected);
+}
+
+function escapeXmlAttribute(value) {
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/'/g, '&apos;');
+}
+
+function buildStreamTwiml(callSid, preface = 'Connecting you now.') {
+    const token = generateCallToken(callSid);
+    const wssBase = PUBLIC_BASE_URL.replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://');
+    const wsUrl = `${wssBase}/media-stream?token=${encodeURIComponent(token)}&callSid=${encodeURIComponent(callSid)}`;
+
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Joanna-Neural">${preface}</Say>
+  <Connect>
+    <Stream url="${escapeXmlAttribute(wsUrl)}" statusCallback="${escapeXmlAttribute(`${PUBLIC_BASE_URL}/voice-status`)}" statusCallbackMethod="POST" />
+  </Connect>
+</Response>`;
 }
 
 function validateTwilioSignature(url, params, signature) {
@@ -80,7 +129,10 @@ function validateTwilioSignature(url, params, signature) {
 // -- Clients --
 const app = Fastify({
     logger: true,
-    trustProxy: true  // Critical for Railway proxy headers
+    trustProxy: true,  // Critical for Railway proxy headers
+    routerOptions: {
+        ignoreTrailingSlash: true
+    }
 });
 const twilioClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
 const mailTransport = nodemailer.createTransport({
@@ -166,20 +218,7 @@ async function handleVoiceWebhook(request, reply) {
     const callSid = params.CallSid || 'UNKNOWN';
     console.log(`[Webhook] Incoming call: ${callSid}`);
 
-    // Generate secure token for this call
-    const token = generateCallToken(callSid);
-
-    // Build secure WebSocket URL with token (use PUBLIC_BASE_URL as source of truth)
-    const wssBase = PUBLIC_BASE_URL.replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://');
-    const wsUrl = `${wssBase}/media-stream?token=${token}&callSid=${callSid}`;
-
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="Polly.Joanna-Neural">Hello, thank you for calling Trade Line 24 7. Connecting you now.</Say>
-  <Connect>
-    <Stream url="${wsUrl}" statusCallback="${PUBLIC_BASE_URL}/voice-status" statusCallbackMethod="POST" />
-  </Connect>
-</Response>`;
+    const twiml = buildStreamTwiml(callSid, 'Hello, thank you for calling Trade Line 24 7. Connecting you now.');
 
     reply
         .code(200)
@@ -188,9 +227,9 @@ async function handleVoiceWebhook(request, reply) {
 }
 
 // Webhook routes (canonical + aliases for resilience)
-app.post('/voice', handleVoiceWebhook);
-app.post('/voice-answer', handleVoiceWebhook);
-app.post('/', handleVoiceWebhook); // Fallback if Twilio points to root
+for (const route of ['/voice', '/voice-answer', '/incoming', '/']) {
+    app.post(route, handleVoiceWebhook);
+}
 
 // WebSocket Route (The Core Loop)
 app.register(async (fastify) => {
@@ -198,7 +237,7 @@ app.register(async (fastify) => {
         // Extract and validate query params (token security)
         const url = new URL(req.url, `http://${req.headers.host}`);
         const token = url.searchParams.get('token');
-        const callSid = url.searchParams.get('callSid');
+        let callSid = url.searchParams.get('callSid');
 
         // Validate token
         if (!callSid || !token || !validateCallToken(callSid, token)) {
@@ -231,12 +270,16 @@ app.register(async (fastify) => {
             }
             if (name === 'transfer_call') {
                 if (!callSid) return { status: 'error', message: 'No CallSid found' };
+                if (!DISPATCH_PHONE_NUMBER) {
+                    console.error('[Dispatch] Transfer requested but DISPATCH_PHONE_NUMBER is missing');
+                    return { status: 'error', message: 'Transfer line is not configured' };
+                }
                 try {
                     console.log(`[Dispatch] Transferring Call ${callSid} to ${DISPATCH_PHONE_NUMBER}`);
                     await twilioClient.calls(callSid).update({
                         twiml: `<Response>
                       <Say>Please hold while I transfer you to a specialist.</Say>
-                      <Dial>${DISPATCH_PHONE_NUMBER}</Dial>
+                      <Dial action="${PUBLIC_BASE_URL}/transfer-fallback?callSid=${encodeURIComponent(callSid)}" method="POST" timeout="20" answerOnBridge="true">${DISPATCH_PHONE_NUMBER}</Dial>
                     </Response>`
                     });
                     return { status: 'success', message: 'Call transferred' };
@@ -429,6 +472,33 @@ app.post('/voice-status', async (req, reply) => {
     }
 
     return { status: 'ok' };
+});
+
+
+app.post('/transfer-fallback', async (req, reply) => {
+    const signature = req.headers['x-twilio-signature'];
+    const url = `${PUBLIC_BASE_URL}${req.url}`;
+    const params = req.body || {};
+
+    if (!validateTwilioSignature(url, params, signature)) {
+        console.error('[Security] Invalid Twilio signature on transfer fallback');
+        return reply.code(403).send('Forbidden');
+    }
+
+    const callSid = req.query.callSid || req.body.CallSid;
+    const dialStatus = req.body.DialCallStatus || 'unknown';
+    console.log(`[Dispatch] Transfer fallback for ${callSid}: ${dialStatus}`);
+
+    if (dialStatus === 'completed') {
+        return reply.code(200).header('Content-Type', 'text/xml').send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+    }
+
+    const twiml = buildStreamTwiml(
+        callSid,
+        'I could not connect a specialist right now. I am back on the line and can continue helping you.'
+    );
+
+    return reply.code(200).header('Content-Type', 'text/xml').send(twiml);
 });
 
 // -- Start Server --

@@ -1,8 +1,13 @@
 {
   "name": "tradeline247-railway",
   "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "tradeline-voice-server"
+  ],
   "scripts": {
-    "start": "cd tradeline-voice-server && node server.mjs",  },
+    "start": "npm --workspace tradeline-voice-server start"
+  },
   "engines": {
     "node": ">=18.0.0"
   }
