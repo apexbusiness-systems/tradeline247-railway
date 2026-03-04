@@ -33,8 +33,8 @@ if (!PUBLIC_BASE_URL) {
 }
 PUBLIC_BASE_URL = PUBLIC_BASE_URL.trim().replace(/\/$/, ''); // trim and remove trailing slash
 if (!PUBLIC_BASE_URL.startsWith('http://') && !PUBLIC_BASE_URL.startsWith('https://')) {
-    console.error('CRITICAL: PUBLIC_BASE_URL must start with http:// or https://');
-    process.exit(1);
+    console.warn('[Config] PUBLIC_BASE_URL missing protocol; defaulting to https://');
+    PUBLIC_BASE_URL = `https://${PUBLIC_BASE_URL}`;
 }
 console.log(`[Config] PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}`);
 
@@ -44,20 +44,55 @@ if (!TWILIO_AUTH_TOKEN) {
 
 // -- Global State --
 const sessionStore = new Map(); // CallSid -> { transcript: [], startTime: Date }
-const callTokens = new Map(); // callSid -> token (short-lived, 5min expiry)
 
 // -- Security Helpers --
 import crypto from 'crypto';
 
 function generateCallToken(callSid) {
-    const token = crypto.randomBytes(16).toString('hex');
-    callTokens.set(callSid, token);
-    setTimeout(() => callTokens.delete(callSid), 300000); // 5min expiry
-    return token;
+    const expiresAt = Date.now() + 300000; // 5 minutes
+    const payload = `${callSid}.${expiresAt}`;
+    const secret = TWILIO_AUTH_TOKEN || OPENAI_API_KEY;
+    const signature = crypto
+        .createHmac('sha256', secret)
+        .update(payload)
+        .digest('hex');
+
+    return `${payload}.${signature}`;
 }
 
 function validateCallToken(callSid, token) {
-    return callTokens.get(callSid) === token;
+    if (!token) return false;
+
+    const tokenParts = token.split('.');
+    if (tokenParts.length !== 3) return false;
+
+    const [tokenCallSid, expiresAtRaw, providedSignature] = tokenParts;
+    if (tokenCallSid !== callSid) return false;
+
+    const expiresAt = Number(expiresAtRaw);
+    if (!Number.isFinite(expiresAt) || Date.now() > expiresAt) return false;
+
+    const payload = `${tokenCallSid}.${expiresAtRaw}`;
+    const secret = TWILIO_AUTH_TOKEN || OPENAI_API_KEY;
+    const expectedSignature = crypto
+        .createHmac('sha256', secret)
+        .update(payload)
+        .digest('hex');
+
+    const provided = Buffer.from(providedSignature, 'hex');
+    const expected = Buffer.from(expectedSignature, 'hex');
+    if (provided.length !== expected.length) return false;
+
+    return crypto.timingSafeEqual(provided, expected);
+}
+
+function escapeXmlAttribute(value) {
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/'/g, '&apos;');
 }
 
 function validateTwilioSignature(url, params, signature) {
@@ -80,7 +115,10 @@ function validateTwilioSignature(url, params, signature) {
 // -- Clients --
 const app = Fastify({
     logger: true,
-    trustProxy: true  // Critical for Railway proxy headers
+    trustProxy: true,  // Critical for Railway proxy headers
+    routerOptions: {
+        ignoreTrailingSlash: true
+    }
 });
 const twilioClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
 const mailTransport = nodemailer.createTransport({
@@ -171,13 +209,13 @@ async function handleVoiceWebhook(request, reply) {
 
     // Build secure WebSocket URL with token (use PUBLIC_BASE_URL as source of truth)
     const wssBase = PUBLIC_BASE_URL.replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://');
-    const wsUrl = `${wssBase}/media-stream?token=${token}&callSid=${callSid}`;
+    const wsUrl = `${wssBase}/media-stream?token=${encodeURIComponent(token)}&callSid=${encodeURIComponent(callSid)}`;
 
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="Polly.Joanna-Neural">Hello, thank you for calling Trade Line 24 7. Connecting you now.</Say>
   <Connect>
-    <Stream url="${wsUrl}" statusCallback="${PUBLIC_BASE_URL}/voice-status" statusCallbackMethod="POST" />
+    <Stream url="${escapeXmlAttribute(wsUrl)}" statusCallback="${escapeXmlAttribute(`${PUBLIC_BASE_URL}/voice-status`)}" statusCallbackMethod="POST" />
   </Connect>
 </Response>`;
 
@@ -188,9 +226,9 @@ async function handleVoiceWebhook(request, reply) {
 }
 
 // Webhook routes (canonical + aliases for resilience)
-app.post('/voice', handleVoiceWebhook);
-app.post('/voice-answer', handleVoiceWebhook);
-app.post('/', handleVoiceWebhook); // Fallback if Twilio points to root
+for (const route of ['/voice', '/voice-answer', '/incoming', '/']) {
+    app.post(route, handleVoiceWebhook);
+}
 
 // WebSocket Route (The Core Loop)
 app.register(async (fastify) => {
@@ -198,7 +236,7 @@ app.register(async (fastify) => {
         // Extract and validate query params (token security)
         const url = new URL(req.url, `http://${req.headers.host}`);
         const token = url.searchParams.get('token');
-        const callSid = url.searchParams.get('callSid');
+        let callSid = url.searchParams.get('callSid');
 
         // Validate token
         if (!callSid || !token || !validateCallToken(callSid, token)) {
