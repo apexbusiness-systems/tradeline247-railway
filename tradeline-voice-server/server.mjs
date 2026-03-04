@@ -198,7 +198,7 @@ app.register(async (fastify) => {
         // Extract and validate query params (token security)
         const url = new URL(req.url, `http://${req.headers.host}`);
         const token = url.searchParams.get('token');
-        const callSid = url.searchParams.get('callSid');
+        let callSid = url.searchParams.get('callSid');
 
         // Validate token
         if (!callSid || !token || !validateCallToken(callSid, token)) {
