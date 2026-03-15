@@ -12,8 +12,8 @@ const twilio = require('twilio');
 
 // -- Configuration --
 const PORT = process.env.PORT || 8080;
-const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL;
-const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
+const { PUBLIC_BASE_URL } = process.env;
+const { TWILIO_AUTH_TOKEN } = process.env;
 
 // -- Environment Validation --
 if (!process.env.OPENAI_API_KEY) {
@@ -73,7 +73,7 @@ app.post('/voice-answer', (req, res) => {
       </Connect>
     </Response>`;
 
-  res.type('text/xml').send(twiml);
+  return res.type('text/xml').send(twiml);
 });
 
 // -- WebSocket Server (The Brain) --
@@ -158,11 +158,10 @@ wss.on('connection', (ws) => {
         session.abortController = new AbortController();
 
         // 1.2s Dead Air Timer
-        let fillerSent = false;
         const fillerTimer = setTimeout(() => {
           if (ws.readyState === ws.OPEN && !session.abortController.signal.aborted) {
-            fillerSent = true;
-            // Provide localized fillers if possible, for now simple english fallback or multi-lang aware
+            // Provide localized fillers if possible,
+            // for now simple english fallback or multi-lang aware
             const filler = userLang.startsWith('es') ? 'Un momento...' : 'One moment...';
             console.log(`[Filler]: ${filler}`);
             ws.send(JSON.stringify({
@@ -232,7 +231,6 @@ wss.on('connection', (ws) => {
           session.abortController.abort();
         }
       }
-
     } catch (err) {
       console.error('[Error] Msg Processing:', err);
     }

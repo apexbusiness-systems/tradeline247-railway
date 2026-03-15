@@ -322,6 +322,17 @@ app.register(async (fastify) => {
                 try {
                     const response = JSON.parse(data);
 
+                    // Interruption Handling (Barge-in)
+                    if (response.type === 'input_audio_buffer.speech_started') {
+                        sendToOpenAI({
+                            type: 'input_audio_buffer.clear'
+                        });
+                        connection.socket.send(JSON.stringify({
+                            event: 'clear',
+                            streamSid: streamSid
+                        }));
+                    }
+
                     // 1. Audio Relay (AI -> Twilio)
                     if (response.type === 'response.audio.delta' && response.delta) {
                         connection.socket.send(JSON.stringify({
